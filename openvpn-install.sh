@@ -44,19 +44,20 @@ source "$CONF_PATH"
 
 newclient () {
     # Generates the custom client.ovpn
-    cp /etc/openvpn/client-common.txt ~/$1.ovpn
-    echo "<ca>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/pki/ca.crt >> ~/$1.ovpn
-    echo "</ca>" >> ~/$1.ovpn
-    echo "<cert>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/pki/issued/$1.crt >> ~/$1.ovpn
-    echo "</cert>" >> ~/$1.ovpn
-    echo "<key>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/pki/private/$1.key >> ~/$1.ovpn
-    echo "</key>" >> ~/$1.ovpn
-    echo "<tls-auth>" >> ~/$1.ovpn
-    cat /etc/openvpn/ta.key >> ~/$1.ovpn
-    echo "</tls-auth>" >> ~/$1.ovpn
+
+    cp /etc/openvpn/client-common.txt "$2"
+    echo "<ca>" >> "$2"
+    cat /etc/openvpn/easy-rsa/pki/ca.crt >> "$2"
+    echo "</ca>" >> "$2"
+    echo "<cert>" >> "$2"
+    cat /etc/openvpn/easy-rsa/pki/issued/$1.crt >> "$2"
+    echo "</cert>" >> "$2"
+    echo "<key>" >> "$2"
+    cat /etc/openvpn/easy-rsa/pki/private/$1.key >> "$2"
+    echo "</key>" >> "$2"
+    echo "<tls-auth>" >> "$2"
+    cat /etc/openvpn/ta.key >> "$2"
+    echo "</tls-auth>" >> "$2"
 }
 
 if [[ -e /etc/openvpn/server.conf ]]; then
@@ -137,11 +138,11 @@ if [[ -e /etc/openvpn/server.conf ]]; then
                     firewall-cmd --zone=trusted --remove-source=$IP_LOCAL_BASE/$IP_RANGE
                     firewall-cmd --permanent --zone=public --remove-port=$PORT/$PROTOCOL
                     firewall-cmd --permanent --zone=trusted --remove-source=$IP_LOCAL_BASE/$IP_RANGE
-                    firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
-                    firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+                    firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+                    firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
                 else
-                    IP=$(grep 'iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
-                    iptables -t nat -D POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+                    IP=$(grep 'iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
+                    iptables -t nat -D POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
                     sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 ! -d 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
                     if iptables -L -n | grep -qE '^ACCEPT'; then
                         iptables -D INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
@@ -231,7 +232,11 @@ else
         yum install epel-release -y
         yum install curl openvpn iptables openssl ca-certificates dnsmasq -y
     fi
+
     # Get easy-rsa
+    echo
+    echo "Installing Easy RSA"
+    echo
     EASYRSAURL='https://github.com/OpenVPN/easy-rsa/releases/download/v3.0.5/EasyRSA-nix-3.0.5.tgz'
     wget -O ~/easyrsa.tgz "$EASYRSAURL" 2>/dev/null || curl -Lo ~/easyrsa.tgz "$EASYRSAURL"
     tar xzf ~/easyrsa.tgz -C ~/
@@ -241,26 +246,47 @@ else
     rm -f ~/easyrsa.tgz
 
     # Get the sqlite auth project
+    echo
+    echo "Installing OpenVPN SQLite Auth"
+    echo
     SQLITEAUTHURL='https://github.com/mdeous/openvpn-sqlite-auth/archive/master.tar.gz'
     wget -O ~/openvpn-sqlite-auth.tgz "$SQLITEAUTHURL" 2>/dev/null || curl -Lo ~/openvpn-sqlite-auth.tgz "$SQLITEAUTHURL"
     tar xzf ~/openvpn-sqlite-auth.tgz -C ~/
     mv ~/openvpn-sqlite-auth-master/ /etc/openvpn/openvpn-sqlite-auth
     rm -f ~/openvpn-sqlite-auth.tgz
+    # Install the sql auth config
+    echo "# -*- coding: utf-8 -*-
+
+# Path where users database should be stored
+DB_PATH = '/etc/openvpn/openvpn-sqlite-auth/db.sqlite'
+# Minimum required length for passwords when creating users
+PASSWORD_LENGTH_MIN = 8
+# Hash algorithm to use for passwords storage. Can be one of:
+# md5, sha1, sha224, sha256, sha384, sha512
+HASH_ALGORITHM = 'sha512'
+" > /etc/openvpn/openvpn-sqlite-auth/config.py
+
 
     # Install the host_ban generator
-    echo "#/bin/bash
+    echo '# Hosts ban URLs, see https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist for more info
+https://hosts.ubuntu101.co.za/hosts
+    ' > /etc/hosts_ban.conf
+    echo '#/bin/bash
 TMPFILE=$(mktemp)
 TMPCONF=$(mktemp)
 cat /etc/hosts_ban.conf | while read URL ; do
-  R=$(curl -s --max-time 6 $URL | grep 0.0.0.0 | grep -v '#' > $TMPFILE )
+  [[ "$URL" =~ ^# ]] || [[ -z "$URL" ]] && continue
+  R=$(curl -s --max-time 6 $URL | grep 0.0.0.0 | grep -E -v "(#|>)" > $TMPFILE )
   [ $? -eq 0 ] && cat $TMPFILE >> $TMPCONF
 done
 sort -u -o $TMPCONF $TMPCONF
 cat $TMPCONF > /etc/hosts_ban
 rm -f $TMPFILE $TMPCONF
-" > /usr/local/sbin/host_ban_generator
-    chmod 700 /usr/local/bin/host_ban_generator
-    chown root:root /usr/local/bin/host_ban_generator
+service dnsmasq restart
+' > /usr/local/sbin/host_ban_generator
+    chmod 700 /usr/local/sbin/host_ban_generator
+    chown root:root /usr/local/sbin/host_ban_generator
+    /usr/local/sbin/host_ban_generator
 
     echo "32 10 * * * root /usr/local/sbin/host_ban_generator &>/dev/null" > /etc/cron.d/host_ban_generator
     chmod 644 /etc/cron.d/host_ban_generator
@@ -290,25 +316,22 @@ ssbzSibBsu/6iGtCOGEoXJf//////////wIBAg==
 -----END DH PARAMETERS-----' > /etc/openvpn/dh.pem
     # Generate server.conf
     echo "local $IP
+mode server
+tls-server
 port $PORT
 proto $PROTOCOL
 dev $DEV
-mode server
-tls-server
-tun-mtu 1480
-mssfix 1400
-persist-key
-persist-tun
+sndbuf 0
+rcvbuf 0
 ca ca.crt
 cert server.crt
 key server.key
 dh dh.pem
+auth SHA512
 tls-auth ta.key 0
-
-ifconfig-pool $IP_LOCAL_MIN $IP_LOCAL_MAX
+topology subnet
+server $IP_LOCAL_BASE $IP_LOCAL_RANGE
 ifconfig-pool-persist /var/log/openvpn/persistant.txt
-push route 0.0.0.0 128.0.0.0 vpn_gateway
-push route 128.0.0.0 128.0.0.0 vpn_gateway
 push \"redirect-gateway def1 bypass-dhcp\"
 push \"dhcp-option DNS $IP_LOCAL_DNS\"
 " > /etc/openvpn/server.conf
@@ -351,10 +374,8 @@ push \"dhcp-option DNS $IP_LOCAL_DNS\"
     esac
     echo "
 duplicate-cn
-client-to-client
 keepalive 10 120
 cipher AES-256-CBC
-max-clients 100
 user nobody
 group $GROUPNAME
 persist-key
@@ -368,7 +389,7 @@ crl-verify crl.pem
 up /etc/openvpn/vpn.up.sh
 
 auth-user-pass-verify /etc/openvpn/openvpn-sqlite-auth/user-auth.py via-env
-script-security 3 system
+script-security 3
 
 # EOF" >> /etc/openvpn/server.conf
     # Enable net.ipv4.ip_forward for the system
@@ -385,8 +406,8 @@ script-security 3 system
         firewall-cmd --permanent --zone=public --add-port=$PORT/$PROTOCOL
         firewall-cmd --permanent --zone=trusted --add-source=$IP_LOCAL_BASE/$IP_RANGE
         # Set NAT for the VPN subnet
-        firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
-        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+        firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
     else
         # Needed to use rc.local with some systemd distros
         if [[ "$OS" = 'debian' && ! -e $RCLOCAL ]]; then
@@ -395,8 +416,8 @@ exit 0' > $RCLOCAL
         fi
         chmod +x $RCLOCAL
         # Set NAT for the VPN subnet
-        iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
-        sed -i "1 a\iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP" $RCLOCAL
+        iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+        sed -i "1 a\iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP" $RCLOCAL
         if iptables -L -n | grep -qE '^(REJECT|DROP)'; then
             # If iptables has at least one REJECT rule, we asume this is needed.
             # Not the best approach but I can't think of other and this shouldn't
@@ -409,6 +430,15 @@ exit 0' > $RCLOCAL
             sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
         fi
     fi
+    echo "#!/bin/bash
+ip l set tun0 up
+ip a add $IP_LOCAL_DNS/$IP_RANGE dev tun0
+exit 0
+" >/etc/openvpn/vpn.up.sh
+    chmod 755 /etc/openvpn/vpn.up.sh
+    chown root:root /etc/openvpn/vpn.up.sh
+
+
     # Set up dnsmasq and restart
     echo "
 addn-hosts=/etc/hosts_ban
@@ -444,6 +474,7 @@ server=$DNS_2
         semanage port -a -t openvpn_port_t -p $PROTOCOL $PORT
     fi
     # And finally, restart OpenVPN
+    mkdir -p /var/log/openvpn
     if [[ "$OS" = 'debian' ]]; then
         # Little hack to check for systemd
         if pgrep systemd-journal; then
@@ -465,38 +496,39 @@ server=$DNS_2
         IP=$PUBLICIP
     fi
     # client-common.txt is created so we have a template to add further users later
-    echo "
-client
-auth-user-pass
-remote $IP
-port $PORT
-proto $PROTOCOL
-
-dev $DEV
-resolv-retry infinite
+    echo "client
 tls-client
-
-key-direction 1
-ns-cert-type server
-keepalive 10 120
-cipher AES-256-CBC
-pull
-
+dev $DEV
+proto $PROTOCOL
+sndbuf 0
+rcvbuf 0
+remote $IP $PORT
+resolv-retry infinite
+nobind
 persist-key
 persist-tun
-nobind
 remote-cert-tls server
+auth-user-pass
+auth SHA512
+cipher AES-256-CBC
 setenv opt block-outside-dns
-
-
+key-direction 1
+verb 3
 # EOF
 " > /etc/openvpn/client-common.txt
     # Generates the custom client.ovpn
-    newclient "$CLIENT"
+    OVPN_PATH="/etc/openvpn/client/$CLIENT.ovpn"
+    newclient "$CLIENT" "$OVPN_PATH"
+    /etc/openvpn/openvpn-sqlite-auth/createdb.py
     echo
     echo "Finished!"
     echo
-    echo "Your client configuration is available at:" ~/"$CLIENT.ovpn"
-    echo "Please create your first user!"
-    etc/openvpn/openvpn-sqlite-auth/user-add.py
+    echo "Your client configuration is available at:" "$OVPN_PATH"
+    echo
+    echo "Please create your first user! Run:"
+    echo
+    echo "  /etc/openvpn/openvpn-sqlite-auth/user-add.py <username>"
+    echo
+
+
 fi
