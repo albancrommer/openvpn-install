@@ -131,21 +131,21 @@ if [[ -e /etc/openvpn/server.conf ]]; then
                 PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
                 PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
                 if pgrep firewalld; then
-                    IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s 10.8.0.0/24 '"'"'!'"'"' -d 10.8.0.0/24 -j SNAT --to ' | cut -d " " -f 10)
+                    IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s $IP_LOCAL_BASE/$IP_RANGE '"'"'!'"'"' -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to ' | cut -d " " -f 10)
                     # Using both permanent and not permanent rules to avoid a firewalld reload.
                     firewall-cmd --zone=public --remove-port=$PORT/$PROTOCOL
-                    firewall-cmd --zone=trusted --remove-source=10.8.0.0/24
+                    firewall-cmd --zone=trusted --remove-source=$IP_LOCAL_BASE/$IP_RANGE
                     firewall-cmd --permanent --zone=public --remove-port=$PORT/$PROTOCOL
-                    firewall-cmd --permanent --zone=trusted --remove-source=10.8.0.0/24
-                    firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-                    firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+                    firewall-cmd --permanent --zone=trusted --remove-source=$IP_LOCAL_BASE/$IP_RANGE
+                    firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+                    firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
                 else
-                    IP=$(grep 'iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
-                    iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+                    IP=$(grep 'iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
+                    iptables -t nat -D POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
                     sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 ! -d 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
                     if iptables -L -n | grep -qE '^ACCEPT'; then
                         iptables -D INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-                        iptables -D FORWARD -s 10.8.0.0/24 -j ACCEPT
+                        iptables -D FORWARD -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT
                         iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
                         sed -i "/iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT/d" $RCLOCAL
                         sed -i "/iptables -I FORWARD -s 10.8.0.0\/24 -j ACCEPT/d" $RCLOCAL
@@ -225,11 +225,11 @@ else
     read -n1 -r -p "Press any key to continue..."
     if [[ "$OS" = 'debian' ]]; then
         apt-get update
-        apt-get install openvpn iptables openssl ca-certificates -y
+        apt-get install curl openvpn iptables openssl ca-certificates dnsmasq -y
     else
         # Else, the distro is CentOS
         yum install epel-release -y
-        yum install openvpn iptables openssl ca-certificates -y
+        yum install curl openvpn iptables openssl ca-certificates dnsmasq -y
     fi
     # Get easy-rsa
     EASYRSAURL='https://github.com/OpenVPN/easy-rsa/releases/download/v3.0.5/EasyRSA-nix-3.0.5.tgz'
@@ -239,8 +239,35 @@ else
     mv /etc/openvpn/EasyRSA-3.0.5/ /etc/openvpn/easy-rsa/
     chown -R root:root /etc/openvpn/easy-rsa/
     rm -f ~/easyrsa.tgz
-    cd /etc/openvpn/easy-rsa/
+
+    # Get the sqlite auth project
+    SQLITEAUTHURL='https://github.com/mdeous/openvpn-sqlite-auth/archive/master.tar.gz'
+    wget -O ~/openvpn-sqlite-auth.tgz "$SQLITEAUTHURL" 2>/dev/null || curl -Lo ~/openvpn-sqlite-auth.tgz "$SQLITEAUTHURL"
+    tar xzf ~/openvpn-sqlite-auth.tgz -C ~/
+    mv ~/openvpn-sqlite-auth-master/ /etc/openvpn/openvpn-sqlite-auth
+    rm -f ~/openvpn-sqlite-auth.tgz
+
+    # Install the host_ban generator
+    echo "#/bin/bash
+TMPFILE=$(mktemp)
+TMPCONF=$(mktemp)
+cat /etc/hosts_ban.conf | while read URL ; do
+  R=$(curl -s --max-time 6 $URL | grep 0.0.0.0 | grep -v '#' > $TMPFILE )
+  [ $? -eq 0 ] && cat $TMPFILE >> $TMPCONF
+done
+sort -u -o $TMPCONF $TMPCONF
+cat $TMPCONF > /etc/hosts_ban
+rm -f $TMPFILE $TMPCONF
+" > /usr/local/sbin/host_ban_generator
+    chmod 700 /usr/local/bin/host_ban_generator
+    chown root:root /usr/local/bin/host_ban_generator
+
+    echo "32 10 * * * root /usr/local/sbin/host_ban_generator &>/dev/null" > /etc/cron.d/host_ban_generator
+    chmod 644 /etc/cron.d/host_ban_generator
+
+
     # Create the PKI, set up the CA and the server and client certificates
+    cd /etc/openvpn/easy-rsa/
     ./easyrsa init-pki
     ./easyrsa --batch build-ca nopass
     EASYRSA_CERT_EXPIRE=3650 ./easyrsa build-server-full server nopass
@@ -283,41 +310,46 @@ ifconfig-pool-persist /var/log/openvpn/persistant.txt
 push route 0.0.0.0 128.0.0.0 vpn_gateway
 push route 128.0.0.0 128.0.0.0 vpn_gateway
 push \"redirect-gateway def1 bypass-dhcp\"
+push \"dhcp-option DNS $IP_LOCAL_DNS\"
 " > /etc/openvpn/server.conf
     # DNS
     case $DNS in
         1)
-        # Locate the proper resolv.conf
-        # Needed for systems running systemd-resolved
-        if grep -q "127.0.0.53" "/etc/resolv.conf"; then
-            RESOLVCONF='/run/systemd/resolve/resolv.conf'
-        else
-            RESOLVCONF='/etc/resolv.conf'
-        fi
-        # Obtain the resolvers from resolv.conf and use them for OpenVPN
-        grep -v '#' $RESOLVCONF | grep 'nameserver' | grep -E -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | while read line; do
-            echo "push \"dhcp-option DNS $line\"" >> /etc/openvpn/server.conf
-        done
+          # Locate the proper resolv.conf
+          # Needed for systems running systemd-resolved
+          if grep -q "127.0.0.53" "/etc/resolv.conf"; then
+              RESOLVCONF='/run/systemd/resolve/resolv.conf'
+          else
+              RESOLVCONF='/etc/resolv.conf'
+          fi
+          # Obtain the resolvers from resolv.conf and use them for OpenVPN
+
+          R=($(grep -v '#' $RESOLVCONF | grep 'nameserver' | grep -E -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'))
+          case ${#R[@]} in
+            (0) echo "No server found in $RESOLVCONF. Exiting"; exit 1; ;;
+            (1) R+=(${R[0]});; # This is a bit dirty. Same address in both slots
+          esac
+          DNS_1=${R[0]}
+          DNS_2=${R[1]}
         ;;
         2)
-        echo 'push "dhcp-option DNS 1.1.1.1"' >> /etc/openvpn/server.conf
-        echo 'push "dhcp-option DNS 1.0.0.1"' >> /etc/openvpn/server.conf
+          DNS_1=1.1.1.1
+          DNS_2=1.0.0.1
         ;;
         3)
-        echo 'push "dhcp-option DNS 8.8.8.8"' >> /etc/openvpn/server.conf
-        echo 'push "dhcp-option DNS 8.8.4.4"' >> /etc/openvpn/server.conf
+          DNS_1=8.8.4.4
+          DNS_2=8.8.8.8
         ;;
         4)
-        echo 'push "dhcp-option DNS 208.67.222.222"' >> /etc/openvpn/server.conf
-        echo 'push "dhcp-option DNS 208.67.220.220"' >> /etc/openvpn/server.conf
+          DNS_1=208.67.222.220
+          DNS_2=208.67.222.222
         ;;
         5)
-        echo 'push "dhcp-option DNS 64.6.64.6"' >> /etc/openvpn/server.conf
-        echo 'push "dhcp-option DNS 64.6.65.6"' >> /etc/openvpn/server.conf
+          DNS_1=64.6.64.6
+          DNS_2=64.6.65.6
         ;;
     esac
     echo "
-
 duplicate-cn
 client-to-client
 keepalive 10 120
@@ -349,12 +381,12 @@ script-security 3 system
         # We don't use --add-service=openvpn because that would only work with
         # the default port and protocol.
         firewall-cmd --zone=public --add-port=$PORT/$PROTOCOL
-        firewall-cmd --zone=trusted --add-source=10.8.0.0/24
+        firewall-cmd --zone=trusted --add-source=$IP_LOCAL_BASE/$IP_RANGE
         firewall-cmd --permanent --zone=public --add-port=$PORT/$PROTOCOL
-        firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
+        firewall-cmd --permanent --zone=trusted --add-source=$IP_LOCAL_BASE/$IP_RANGE
         # Set NAT for the VPN subnet
-        firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+        firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
     else
         # Needed to use rc.local with some systemd distros
         if [[ "$OS" = 'debian' && ! -e $RCLOCAL ]]; then
@@ -363,18 +395,44 @@ exit 0' > $RCLOCAL
         fi
         chmod +x $RCLOCAL
         # Set NAT for the VPN subnet
-        iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-        sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+        iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP
+        sed -i "1 a\iptables -t nat -A POSTROUTING -s $IP_LOCAL_BASE/$IP_RANGE ! -d $IP_LOCAL_BASE/$IP_RANGE -j SNAT --to $IP" $RCLOCAL
         if iptables -L -n | grep -qE '^(REJECT|DROP)'; then
             # If iptables has at least one REJECT rule, we asume this is needed.
             # Not the best approach but I can't think of other and this shouldn't
             # cause problems.
             iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-            iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT
+            iptables -I FORWARD -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT
             iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
             sed -i "1 a\iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT" $RCLOCAL
-            sed -i "1 a\iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT" $RCLOCAL
+            sed -i "1 a\iptables -I FORWARD -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT" $RCLOCAL
             sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
+        fi
+    fi
+    # Set up dnsmasq and restart
+    echo "
+addn-hosts=/etc/hosts_ban
+bogus-priv
+domain-needed
+listen-address=127.0.0.1
+listen-address=$IP_LOCAL_DNS
+server=$DNS_1
+server=$DNS_2
+#EOF" > /etc/dnsmasq.conf
+   if [[ "$OS" = 'debian' ]]; then
+        # Little hack to check for systemd
+        if pgrep systemd-journal; then
+            systemctl restart dnsmasq.service
+        else
+            /etc/init.d/dnsmasq restart
+        fi
+    else
+        if pgrep systemd-journal; then
+            systemctl restart dnsmasq.service
+            systemctl enable dnsmasq.service
+        else
+            service dnsmasq restart
+            chkconfig dnsmasq on
         fi
     fi
     # If SELinux is enabled and a custom port was selected, we need this
@@ -439,5 +497,6 @@ setenv opt block-outside-dns
     echo "Finished!"
     echo
     echo "Your client configuration is available at:" ~/"$CLIENT.ovpn"
-    echo "If you want to add more clients, you simply need to run this script again!"
+    echo "Please create your first user!"
+    etc/openvpn/openvpn-sqlite-auth/user-add.py
 fi
