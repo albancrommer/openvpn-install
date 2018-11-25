@@ -4,8 +4,8 @@ Based on the OpenVPN [road warrior installer for Debian, Ubuntu and CentOS.](htt
 
 This script will let you setup your own VPN server in no more than a minute, even if you haven't used OpenVPN before. It has been designed to be as unobtrusive and universal as possible.
 
-The custom version does a bit more:
-* [Use login/password together with certificates](#login-password)
+This is a custom version which does a bit more than the original:
+* [Use login/password together with certificates](#login--password)
 * [Filter rogue DNS on the server side](#filter-dns)
 
 ### Installation
