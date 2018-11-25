@@ -56,11 +56,13 @@ It means that requests to domain names considered *unsafe* are blackholed, i.e. 
 
 Apart from sparing a reasonable of bandwidth, the advantage lays in what is considered *unsafe*. We consider analytics, tracking or exploits to be *unsafe*. 
 
-[PiHole](https://pi-hole.net/) and [BobsNico](https://github.com/BobNisco/adblocking-vpn) were other inspirations / guides on that topic.
+We technicaly use [dnsmasq](http://www.thekelleys.org.uk/dnsmasq/doc.html) to read the banned hosts list.
 
-We use [dnsmasq](http://www.thekelleys.org.uk/dnsmasq/doc.html) for that purpose, together with an agressive [Hosts Blacklist](https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist) as a default.
+By default, our hosts list source is the rather agressive [Ultimate Hosts Blacklist](https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist) (+1.3M hosts)
 
 A daily cron script is created to update daily the hosts ban list. You can edit and configure your sources in `/etc/hosts_ban.conf`, one HTTP source per line.
+
+[PiHole](https://pi-hole.net/) and [BobsNico](https://github.com/BobNisco/adblocking-vpn) were other inspirations / guides on that topic.
 
 
 ### Donations
