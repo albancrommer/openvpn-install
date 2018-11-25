@@ -268,6 +268,9 @@ HASH_ALGORITHM = 'sha512'
 
 
     # Install the host_ban generator
+    echo
+    echo "Installing hosts blackholing"
+    echo
     echo '# Hosts ban URLs, see https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist for more info
 https://hosts.ubuntu101.co.za/hosts
     ' > /etc/hosts_ban.conf
@@ -276,7 +279,7 @@ TMPFILE=$(mktemp)
 TMPCONF=$(mktemp)
 cat /etc/hosts_ban.conf | while read URL ; do
   [[ "$URL" =~ ^# ]] || [[ -z "$URL" ]] && continue
-  R=$(curl -s --max-time 6 $URL | grep 0.0.0.0 | grep -E -v "(#|>)" > $TMPFILE )
+  R=$(curl -s --max-time 120 $URL | grep 0.0.0.0 | grep -E -v "(#|>)" > $TMPFILE )
   [ $? -eq 0 ] && cat $TMPFILE >> $TMPCONF
 done
 sort -u -o $TMPCONF $TMPCONF
