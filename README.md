@@ -50,7 +50,7 @@ They are a set of python scripts we locate in `/etc/openvpn/openvpn-sqlite-auth`
 
 #### Filter DNS 
 
-This was inspired by Blokada which provides a local VPN with DNS blackholing.
+This was inspired by [Blokada](https://blokada.org/) which provides a local VPN with DNS blackholing.
 
 It means that requests to domain names considered *unsafe* are blackholed, i.e. sent to a virtual trashbin.
 
