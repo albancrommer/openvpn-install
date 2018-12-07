@@ -35,12 +35,22 @@ else
     exit
 fi
 
-
-# Use existing OR build a config.sh
 APP_PATH=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+# set some variables that can be overriden in the config.sh file
+# DO NOT CHANGE THESE PARAMETERS IF YOU DON'T KNOW WHAT YOU'RE DOING
+IP_LOCAL_BASE=10.8.0.0
+IP_LOCAL_RANGE=255.255.255.0
+IP_LOCAL_DNS=10.8.0.1
+IP_RANGE=24
+DEV=tun
+
+# if a config.sh is available in the same directory, use it
 CONF_PATH="${APP_PATH}/config.sh"
-[ -f "${APP_PATH}/config.sh" ] || cp "${CONF_PATH}.template" "$CONF_PATH"
-source "$CONF_PATH"
+if [ -f "$CONF_PATH" ] ; then 
+    echo "Using provided $CONF_PATH file"
+    source "$CONF_PATH"
+fi
 
 newclient () {
     # Generates the custom client.ovpn
@@ -267,26 +277,38 @@ HASH_ALGORITHM = 'sha512'
 " > /etc/openvpn/openvpn-sqlite-auth/config.py
 
 
-    # Install the host_ban generator
-    echo
-    echo "Installing hosts blackholing"
-    echo
-    echo '# Hosts ban URLs, see https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist for more info
-https://hosts.ubuntu101.co.za/hosts
-    ' > /etc/hosts_ban.conf
+    # Install the host_ban generator and files
     echo '#/bin/bash
 TMPFILE=$(mktemp)
-TMPCONF=$(mktemp)
+TMPHOSTSFILE=$(mktemp)
+
+# Load all hosts file sequentially
 cat /etc/hosts_ban.conf | while read URL ; do
   [[ "$URL" =~ ^# ]] || [[ -z "$URL" ]] && continue
   R=$(curl -s --max-time 120 $URL | grep 0.0.0.0 | grep -E -v "(#|>)" > $TMPFILE )
-  [ $? -eq 0 ] && cat $TMPFILE >> $TMPCONF
+  [ $? -eq 0 ] && cat $TMPFILE >> $TMPHOSTSFILE
 done
-sort -u -o $TMPCONF $TMPCONF
-cat $TMPCONF > /etc/hosts_ban
-rm -f $TMPFILE $TMPCONF
-service dnsmasq restart
+sort -u -o $TMPHOSTSFILE $TMPHOSTSFILE
+
+# Filter out regular expressions from whitelist
+cat /etc/hosts_ban.whitelist | while read REGEX; do  
+  [[ "$REGEX" =~ ^# ]] || [[ -z "$REGEX" ]] && continue
+  grep -v " $REGEX$" $TMPHOSTSFILE > $TMPFILE 
+  mv $TMPFILE $TMPHOSTSFILE;
+done
+
+# Replace final content
+mv $TMPHOSTSFILE /etc/hosts_ban
+rm -f $TMPFILE 
+
+service dnsmasq restart 
 ' > /usr/local/sbin/host_ban_generator
+    echo '# Hosts ban URLs, see https://github.com/mitchellkrogza/Ultimate.Hosts.Blacklist for more info
+https://hosts.ubuntu101.co.za/hosts
+    ' > /etc/hosts_ban.conf
+    echo '# Hosts ban whitelist 
+https://hosts.ubuntu101.co.za/hosts
+    ' > /etc/hosts_ban.conf
     chmod 700 /usr/local/sbin/host_ban_generator
     chown root:root /usr/local/sbin/host_ban_generator
     /usr/local/sbin/host_ban_generator
@@ -294,6 +316,13 @@ service dnsmasq restart
     echo "32 10 * * * root /usr/local/sbin/host_ban_generator &>/dev/null" > /etc/cron.d/host_ban_generator
     chmod 644 /etc/cron.d/host_ban_generator
 
+    # Create the logrotate.d
+    echo "/var/log/openvpn/openvpn.log {
+        compress
+        copytruncate    
+        rotate 2 
+        weekly
+    }"  > /etc/logrotate.d/openvpn.conf
 
     # Create the PKI, set up the CA and the server and client certificates
     cd /etc/openvpn/easy-rsa/
