@@ -11,7 +11,7 @@ This is a custom version which does a bit more than the original:
 ### Installation
 Run the script and follow the assistant:
 
-`git clone https://github.com/albancrommer/openvpn-install.git && cd openvpn-install && bash openvpn-install.sh`
+`wget https://raw.githubusercontent.com/albancrommer/openvpn-install/master/openvpn-install.sh && bash openvpn-install.sh`
 
 Once it ends, you have to create login/passwords using the following command line:
 
