@@ -455,10 +455,10 @@ exit 0' > $RCLOCAL
             # Not the best approach but I can't think of other and this shouldn't
             # cause problems.
             iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-            iptables -I FORWARD -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT
-            iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+            iptables -I FORWARD \! -d  $IP_LOCAL_BASE/$IP_RANGE -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT
+            iptables -t nat -A POSTROUTING \! -d 10.8.0.0/24 -s 10.8.0.0/24 -j SNAT --to-source 51.159.17.77
             sed -i "1 a\iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT" $RCLOCAL
-            sed -i "1 a\iptables -I FORWARD -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT" $RCLOCAL
+            sed -i "1 a\iptables -I FORWARD \! -d  $IP_LOCAL_BASE/$IP_RANGE -s $IP_LOCAL_BASE/$IP_RANGE -j ACCEPT" $RCLOCAL
             sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
         fi
     fi
